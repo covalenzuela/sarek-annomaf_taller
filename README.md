@@ -26,8 +26,8 @@ Este repositorio contiene el material para un taller práctico donde:
 ## 1. Clonar este repositorio
 
 ```bash
-git clone https://github.com/covalenzuela/sarek-annomaf_taller.git
-cd sarek-workshop
+git clone https://github.com/covalenzuela/sarek_taller.git
+cd sarek_taller
 ```
 
 ---
@@ -54,17 +54,17 @@ source ~/.bashrc
 
 ### 2.2 Crear el entorno del taller
 
-En este repo verás un archivo `.python-version` con un nombre de entorno sugerido (`sarek-workshop-pyenv`).
+En este repo verás un archivo `.python-version` con un nombre de entorno sugerido (`sarek_taller-pyenv`).
 
 ```bash
 # Instalar versión de Python (ajusta si quieres otra)
-pyenv install 3.11.9
+pyenv install 3.10.14
 
 # Crear entorno virtual con pyenv-virtualenv
-pyenv virtualenv 3.11.9 sarek-workshop-pyenv
+pyenv virtualenv 3.10.14 sarek_taller-pyenv
 
 # Asociar ese entorno a esta carpeta
-pyenv local sarek-workshop-pyenv
+pyenv local sarek_taller-pyenv
 ```
 
 ### 2.3 Instalar dependencias de Python
@@ -120,7 +120,7 @@ Esto:
 
 Dentro del entorno pyenv:
 
-```bash
+ls
 jupyter lab
 ```
 
@@ -141,7 +141,7 @@ Este repositorio deja preparado:
 
 Cuando tengas definido el comando real de ANNOMAF (imagen Docker, PyPI, repo de GitHub), puedes:
 
-- añadir un script `scripts/04_run_annomaf.sh`,
+- añadir un script `scripts/05_run_annomaf.sh`,
 - o nuevas celdas en el notebook de Jupyter.
 
 ---
@@ -157,7 +157,8 @@ Cuando tengas definido el comando real de ANNOMAF (imagen Docker, PyPI, repo de 
 ├── scripts/
 │   ├── 01_install_java_nextflow.sh
 │   ├── 02_run_sarek_test.sh
-│   └── 03_run_sarek_with_samplesheet.sh
+│   ├── 03_run_sarek_with_samplesheet.sh
+│   └── 04_run_sarek_germline_with_configs.sh
 └── notebooks/
     └── 01_sarek_from_zero.md
 ```
