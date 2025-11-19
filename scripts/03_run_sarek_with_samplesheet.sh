@@ -2,10 +2,12 @@
 set -euo pipefail
 
 # 03_run_sarek_with_samplesheet.sh
-# Ejecuta nf-core/sarek en modo GERMINAL o SOMATICO con datasets livianos de ejemplo.
+# Ejecuta nf-core/sarek en modo GERMINAL o SOMÁTICO con datasets livianos de ejemplo.
 # - Descarga los FASTQ si no existen (idempotente) con validación de integridad.
-# - Genera un samplesheet acorde a Sarek 3.x (incluye 'patient','lane','status').
-# - Detecta el motor (docker/podman/apptainer/conda).
+# - Genera un samplesheet acorde a Sarek 3.x (patient,sample,lane,fastq_1,fastq_2,sex,status).
+# - Permite activar anotación con SnpEff y/o VEP vía -params-file (snpeff/vep booleans).
+# - Detecta el motor (docker/podman/apptainer/conda/singularity).
+# - Opción de usar o NO un config de recursos (útil en WSL/VMs): export NO_WSL_CFG=1 para saltarlo.
 #
 # Uso:
 #   bash scripts/03_run_sarek_with_samplesheet.sh germinal
@@ -17,8 +19,9 @@ set -euo pipefail
 #   RESUME=1                  # si está seteado, agrega -resume
 #   GENOME=GATK.GRCh38        # alias soportado por Sarek (o setea uno propio)
 #   MAX_RETRIES=3             # veces a reintentar descargas dañadas
+#   ANNOTATORS=snpeff         # 'snpeff', 'vep' o 'vep,snpeff' (en cualquier orden)
+#   NO_WSL_CFG=1              # si se setea, NO pasa -c con el config de recursos
 #
-
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
   echo "Uso: bash $0 <germinal|somatico>"
@@ -31,28 +34,21 @@ DATADIR="$WORKDIR/data"
 mkdir -p "$DATADIR"
 cd "$WORKDIR"
 
-### NUEVO: archivo de configuración de recursos para WSL
+# Archivo de configuración de recursos (útil en WSL/VMs pequeñas)
 NF_CONFIG="${NF_CONFIG:-$WORKDIR/wsl_resources.config}"
-
-cat > "$NF_CONFIG" <<'EOF'
+if [[ -z "${NO_WSL_CFG:-}" ]]; then
+  cat > "$NF_CONFIG" <<'EOF'
 process {
-  // Ejecutar local dentro de WSL
   executor = 'local'
-
-  // Nº máximo de procesos en paralelo en toda la pipeline
   maxForks = 2
-
-  // Recursos por proceso (valores por defecto)
   cpus   = 1
   memory = '3 GB'
   time   = '12h'
-
-  // Techos globales aproximados
   maxCpus   = 2
   maxMemory = '6 GB'
 }
 EOF
-### FIN NUEVO
+fi
 
 # Detectar motor de ejecución
 PROFILE=""
@@ -62,6 +58,8 @@ elif command -v podman >/dev/null 2>&1; then
   PROFILE="podman"
 elif command -v apptainer >/dev/null 2>&1; then
   PROFILE="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+  PROFILE="singularity"
 else
   PROFILE="conda"
 fi
@@ -102,9 +100,7 @@ verify_fastq() {
 }
 
 _fetch() {
-  local url="$1"; shift
-  local out="$1"; shift
-
+  local url="$1"; local out="$2"
   if command -v aria2c >/dev/null 2>&1; then
     aria2c -x 8 -s 8 -c --retry-wait=5 --max-tries=5 -o "$(basename "$out")" -d "$(dirname "$out")" "$url"
   else
@@ -113,8 +109,7 @@ _fetch() {
 }
 
 dl() {
-  local url="$1"
-  local out="$2"
+  local url="$1"; local out="$2"
 
   if [[ -s "$out" ]]; then
     echo "[skip] Ya existe $out"
@@ -142,8 +137,29 @@ dl() {
   exit 2
 }
 
-# ---------- Flujo principal ----------
+# ---------- Construcción de params.yaml (snpeff/vep) ----------
+PARAMS_FILE="$WORKDIR/params_annot.yaml"
+# Por defecto, desactivados
+cat > "$PARAMS_FILE" <<EOF
+snpeff: false
+vep: false
+use_annotation_cache_keys: true
+EOF
 
+if [[ "${ANNOTATORS:-}" =~ (^|,)snpeff($|,) ]]; then
+  sed -i 's/^snpeff: false/snpeff: true/' "$PARAMS_FILE"
+fi
+if [[ "${ANNOTATORS:-}" =~ (^|,)vep($|,) ]]; then
+  sed -i 's/^vep: false/vep: true/' "$PARAMS_FILE"
+fi
+
+# Armar args de config (según NO_WSL_CFG)
+CFG_ARGS=()
+if [[ -z "${NO_WSL_CFG:-}" ]]; then
+  CFG_ARGS=(-c "$NF_CONFIG")
+fi
+
+# ---------- Flujo principal ----------
 case "$MODE" in
   germinal|germ)
     echo ">>> Modo GERMINAL"
@@ -167,8 +183,9 @@ EOF
       --input "$SAMPLESHEET" \
       --genome "$GENOME" \
       --outdir "$OUT" \
+      -params-file "$PARAMS_FILE" \
       -profile "$PROFILE" \
-      -c "$NF_CONFIG" \   ### NUEVO: pasamos el config
+      "${CFG_ARGS[@]}" \
       $RESUME_FLAG
     ;;
 
@@ -201,8 +218,9 @@ EOF
       --genome "$GENOME" \
       --outdir "$OUT" \
       --somatic \
+      -params-file "$PARAMS_FILE" \
       -profile "$PROFILE" \
-      -c "$NF_CONFIG" \   ### NUEVO: pasamos el config
+      "${CFG_ARGS[@]}" \
       $RESUME_FLAG
     ;;
 
