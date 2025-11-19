@@ -6,7 +6,7 @@ set -euo pipefail
 # - Descarga los FASTQ si no existen (idempotente) con validación de integridad.
 # - Genera un samplesheet acorde a Sarek 3.x (patient,sample,lane,fastq_1,fastq_2,sex,status).
 # - Permite activar anotación con SnpEff y/o VEP vía -params-file (snpeff/vep booleans).
-# - Detecta el motor (docker/podman/apptainer/conda/singularity).
+# - Detecta el motor (docker/podman/apptainer/singularity/conda).
 # - Opción de usar o NO un config de recursos (útil en WSL/VMs): export NO_WSL_CFG=1 para saltarlo.
 #
 # Uso:
@@ -50,8 +50,10 @@ process {
 EOF
 fi
 
-# Detectar motor de ejecución
-PROFILE=""
+# ---------- Detección de runtime (robusta) ----------
+PROFILE=""       # perfil a pasar a -profile (docker/podman/apptainer/conda o vacío)
+RUNTIME_FLAG=""  # flags extra (p.ej. -with-singularity)
+
 if command -v docker >/dev/null 2>&1; then
   PROFILE="docker"
 elif command -v podman >/dev/null 2>&1; then
@@ -59,9 +61,20 @@ elif command -v podman >/dev/null 2>&1; then
 elif command -v apptainer >/dev/null 2>&1; then
   PROFILE="apptainer"
 elif command -v singularity >/dev/null 2>&1; then
-  PROFILE="singularity"
-else
+  # Solo Singularity presente: no usar perfil apptainer; forzar -with-singularity
+  PROFILE=""  # sin perfil de runtime
+  RUNTIME_FLAG="-with-singularity"
+  # Cache local para Singularity (opcional, recomendado)
+  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$HOME/.singularity}"
+  mkdir -p "$SINGULARITY_CACHEDIR"
+  # Ayuda a Nextflow a preferir Singularity y no apptainer
+  export NXF_SINGULARITY_ENABLED=true
+  export NXF_APPTAINER_ENABLED=false
+elif command -v conda >/dev/null 2>&1; then
   PROFILE="conda"
+else
+  echo "[ERROR] No hay docker/podman/apptainer/singularity/conda en PATH."
+  exit 1
 fi
 
 # Asegurar Nextflow versión suficiente
@@ -80,7 +93,6 @@ GENOME="${GENOME:-GATK.GRCh38}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 
 # ---------- Utilidades de descarga y verificación ----------
-
 verify_fastq() {
   local f="$1"
   echo ">>> Verificando $f"
@@ -110,7 +122,6 @@ _fetch() {
 
 dl() {
   local url="$1"; local out="$2"
-
   if [[ -s "$out" ]]; then
     echo "[skip] Ya existe $out"
     if verify_fastq "$out"; then
@@ -120,7 +131,6 @@ dl() {
       rm -f "$out"
     fi
   fi
-
   local attempt=1
   while (( attempt <= MAX_RETRIES )); do
     echo "[get] ($attempt/$MAX_RETRIES) $url -> $out"
@@ -132,20 +142,17 @@ dl() {
     rm -f "$out"
     attempt=$((attempt+1))
   done
-
   echo "[FATAL] No se pudo obtener un FASTQ válido: $out"
   exit 2
 }
 
 # ---------- Construcción de params.yaml (snpeff/vep) ----------
 PARAMS_FILE="$WORKDIR/params_annot.yaml"
-# Por defecto, desactivados
 cat > "$PARAMS_FILE" <<EOF
 snpeff: false
 vep: false
 use_annotation_cache_keys: true
 EOF
-
 if [[ "${ANNOTATORS:-}" =~ (^|,)snpeff($|,) ]]; then
   sed -i 's/^snpeff: false/snpeff: true/' "$PARAMS_FILE"
 fi
@@ -157,6 +164,12 @@ fi
 CFG_ARGS=()
 if [[ -z "${NO_WSL_CFG:-}" ]]; then
   CFG_ARGS=(-c "$NF_CONFIG")
+fi
+
+# Helper para componer argumentos de perfil
+profile_args=()
+if [[ -n "$PROFILE" ]]; then
+  profile_args=(-profile "$PROFILE")
 fi
 
 # ---------- Flujo principal ----------
@@ -178,14 +191,15 @@ EOF
     OUT="${OUTDIR:-results_germline}"
     mkdir -p "$OUT"
 
-    echo ">>> Ejecutando Sarek GERMINAL con perfil $PROFILE"
+    echo ">>> Ejecutando Sarek GERMINAL (perfil: ${PROFILE:-none} ${RUNTIME_FLAG})"
     nextflow run nf-core/sarek \
       --input "$SAMPLESHEET" \
       --genome "$GENOME" \
       --outdir "$OUT" \
       -params-file "$PARAMS_FILE" \
-      -profile "$PROFILE" \
+      "${profile_args[@]}" \
       "${CFG_ARGS[@]}" \
+      ${RUNTIME_FLAG} \
       $RESUME_FLAG
     ;;
 
@@ -212,15 +226,16 @@ EOF
     OUT="${OUTDIR:-results_somatic}"
     mkdir -p "$OUT"
 
-    echo ">>> Ejecutando Sarek SOMÁTICO con perfil $PROFILE"
+    echo ">>> Ejecutando Sarek SOMÁTICO (perfil: ${PROFILE:-none} ${RUNTIME_FLAG})"
     nextflow run nf-core/sarek \
       --input "$SAMPLESHEET" \
       --genome "$GENOME" \
       --outdir "$OUT" \
       --somatic \
       -params-file "$PARAMS_FILE" \
-      -profile "$PROFILE" \
+      "${profile_args[@]}" \
       "${CFG_ARGS[@]}" \
+      ${RUNTIME_FLAG} \
       $RESUME_FLAG
     ;;
 
