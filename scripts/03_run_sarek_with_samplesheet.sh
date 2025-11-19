@@ -126,8 +126,7 @@ cat > "$PARAMS_FILE" <<EOF
 input: ""
 genome: "$GENOME"
 aligner: "$ALIGNER"
-tools:
-$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
+tools: "$(echo "$TOOLS_LIST" | sed 's/[[:space:]]//g')"
 # anotación
 snpeff: false
 vep: false
