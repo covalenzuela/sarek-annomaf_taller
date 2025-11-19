@@ -19,8 +19,8 @@ set -euo pipefail
 #   GENOME=GATK.GRCh38
 #   MAX_RETRIES=3
 #   ANNOTATORS=snpeff | vep | vep,snpeff
-#   TOOLS="HaplotypeCaller"  (solo si quieres sobre-escribir los defaults por modo)
-#   ALIGNER=bwa-mem2         (bwa-mem, bwa-mem2, dragmap, etc.)
+#   TOOLS="HaplotypeCaller"      # (solo si quieres sobre-escribir los defaults por modo)
+#   ALIGNER=bwa-mem2             # (bwa-mem, bwa-mem2, dragmap, etc.)
 
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
@@ -50,7 +50,6 @@ else
   echo "[ERROR] No hay docker/podman/apptainer/singularity/conda en PATH."
   exit 1
 fi
-
 PROFILE="$RUNTIME"
 
 # Cache para apptainer/singularity
@@ -111,18 +110,33 @@ dl() {
   echo "[FATAL] No se pudo obtener FASTQ válido: $out"; exit 2
 }
 
-# ---------- params_annot.yaml ----------
-PARAMS_FILE="$WORKDIR/params_annot.yaml"
-cat > "$PARAMS_FILE" <<'EOF'
+# ---------- params.yaml (ÚNICO: run + anotación) ----------
+PARAMS_FILE="$WORKDIR/params.yaml"
+
+# Defaults por modo (si no los sobre-escriben con TOOLS/ALIGNER)
+ALIGNER="${ALIGNER:-bwa-mem2}"
+if [[ "$MODE" =~ ^germ(inal)?$ ]]; then
+  TOOLS_LIST="${TOOLS:-HaplotypeCaller}"
+else
+  TOOLS_LIST="${TOOLS:-Mutect2,Strelka}"
+fi
+
+# Base mínima
+cat > "$PARAMS_FILE" <<EOF
+input: ""
+genome: "$GENOME"
+aligner: "$ALIGNER"
+tools:
+$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
+# anotación
 snpeff: false
 vep: false
 use_annotation_cache_keys: true
 EOF
 
-# Autocomplete de anotadores si se piden
+# Completar anotadores si se piden
 if [[ "${ANNOTATORS:-}" =~ (^|,)snpeff($|,) ]]; then
   sed -i 's/^snpeff: false/snpeff: true/' "$PARAMS_FILE"
-  # Defaults seguros para GRCh38 si el usuario no los pasó por environment
   grep -q '^snpeff_genome:' "$PARAMS_FILE" || echo "snpeff_genome: ${SNPEFF_GENOME:-GRCh38}" >> "$PARAMS_FILE"
   grep -q '^snpeff_db:'     "$PARAMS_FILE" || echo "snpeff_db: ${SNPEFF_DB:-105}"          >> "$PARAMS_FILE"
 fi
@@ -135,22 +149,15 @@ fi
 # Helper perfil
 profile_args=(-profile "$PROFILE")
 
-# Report/timeline/trace con timestamp
+# Report/timeline/trace con timestamp (fuera del OUTDIR para no mezclar)
 ts="$(date +%F_%H-%M-%S)"
+PIPEINFO_DIR="$WORKDIR/${MODE}_pipeline_info"
+mkdir -p "$PIPEINFO_DIR"
 extra_report_args=(
-  -with-report   "$WORKDIR/${MODE}_pipeline_info/execution_report_${ts}.html"
-  -with-timeline "$WORKDIR/${MODE}_pipeline_info/timeline_${ts}.html"
-  -with-trace    "$WORKDIR/${MODE}_pipeline_info/trace_${ts}.txt"
+  -with-report   "$PIPEINFO_DIR/execution_report_${ts}.html"
+  -with-timeline "$PIPEINFO_DIR/timeline_${ts}.html"
+  -with-trace    "$PIPEINFO_DIR/trace_${ts}.txt"
 )
-mkdir -p "$WORKDIR/${MODE}_pipeline_info"
-
-# Defaults por modo (si no los sobre-escriben con TOOLS/ALIGNER)
-ALIGNER="${ALIGNER:-bwa-mem2}"
-if [[ "$MODE" =~ ^germ(inal)?$ ]]; then
-  TOOLS_LIST="${TOOLS:-HaplotypeCaller}"
-else
-  TOOLS_LIST="${TOOLS:-Mutect2,Strelka}"
-fi
 
 # ---------- Flujo principal ----------
 case "$MODE" in
@@ -169,18 +176,10 @@ EOF
 
     OUT="${OUTDIR:-$WORKDIR/results_germline}"; mkdir -p "$OUT"
 
-    # Construye params.yaml dinámico (merge mínimo) aparte del annot
-    RUN_PARAMS="$WORKDIR/params_run.yaml"
-    cat > "$RUN_PARAMS" <<EOF
-input: "$SAMPLESHEET"
-genome: "$GENOME"
-aligner: "$ALIGNER"
-tools:
-$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
-EOF
+    # Inserta el path del samplesheet en el params.yaml
+    sed -i "s|^input: \".*\"|input: \"$SAMPLESHEET\"|" "$PARAMS_FILE"
 
     nextflow run nf-core/sarek \
-      -params-file "$RUN_PARAMS" \
       -params-file "$PARAMS_FILE" \
       --outdir "$OUT" \
       -work-dir "$WORKDIR/work" \
@@ -210,17 +209,9 @@ EOF
 
     OUT="${OUTDIR:-$WORKDIR/results_somatic}"; mkdir -p "$OUT"
 
-    RUN_PARAMS="$WORKDIR/params_run.yaml"
-    cat > "$RUN_PARAMS" <<EOF
-input: "$SAMPLESHEET"
-genome: "$GENOME"
-aligner: "$ALIGNER"
-tools:
-$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
-EOF
+    sed -i "s|^input: \".*\"|input: \"$SAMPLESHEET\"|" "$PARAMS_FILE"
 
     nextflow run nf-core/sarek \
-      -params-file "$RUN_PARAMS" \
       -params-file "$PARAMS_FILE" \
       --outdir "$OUT" \
       --somatic \
