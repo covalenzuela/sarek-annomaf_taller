@@ -43,6 +43,12 @@ RESUME=1 bash scripts/02_run_sarek_test.sh
 
 ## 2) Ejecutar con datos de ejemplo (descarga automática)
 
+> ⚠️ **OJO (para clase):**  
+> En el taller usen **solo** los comandos tal como están escritos aquí.  
+> No cambien `GENOME`, `TOOLS`, `ALIGNER` ni `ANNOTATORS` a menos que sepan lo que hacen:  
+> el script revisa la sintaxis y **corta con error** si hay algo raro (espacios, mayúsculas, anotadores no válidos, etc.).  
+> Si se equivocan con alguna variable de entorno y ven un `[ERROR]`, vuelvan a ejecutar **sin** esas variables.
+
 ### 2.1 Germinal (NA12878, GIAB)
 ```bash
 bash scripts/03_run_sarek_with_samplesheet.sh germinal
@@ -108,7 +114,7 @@ Borrar resultados de **prueba**:
 rm -rf ~/sarek_taller/results_test_sarek
 ```
 
-> No borres `~/sarek_taller/work/` si planeas usar `-resume`.
+> No borres `~/sarek_taller/work_germline` / `~/sarek_taller/work_somatic` si planeas usar `-resume`.
 
 ---
 
@@ -135,12 +141,18 @@ use_annotation_cache_keys: true
 # vep_species: homo_sapiens
 ```
 
-- **`tools`** debe ir **en minúsculas** (ej: `haplotypecaller`, `mutect2,strelka`).  
-- Puedes **sobrescribir** por variable de entorno al ejecutar:
-  ```bash
-  TOOLS="haplotypecaller,deepvariant" ALIGNER=bwa-mem2 RESUME=1 \
-  bash scripts/03_run_sarek_with_samplesheet.sh germinal
-  ```
+Notas rápidas:
+
+- **`tools`** debe ir **en minúsculas**, separado por comas y **sin espacios**  
+  (ej: `haplotypecaller`, `mutect2,strelka`).
+- **`ANNOTATORS`** solo admite: `snpeff`, `vep` o `vep,snpeff` (en minúsculas, sin espacios).  
+  Cualquier otro valor hará que el script falle con un mensaje tipo:  
+  `ANNOTATORS contiene valor no soportado: '...'`.
+
+Puedes **sobrescribir** por variable de entorno al ejecutar:
+```bash
+TOOLS="haplotypecaller,deepvariant" ALIGNER=bwa-mem2 RESUME=1 bash scripts/03_run_sarek_with_samplesheet.sh germinal
+```
 
 ---
 
@@ -150,29 +162,12 @@ Lo que lanza el script (plantilla):
 
 **Germinal**
 ```bash
-nextflow run nf-core/sarek \
-  -params-file "$HOME/sarek_taller/params.yaml" \
-  --outdir "$HOME/sarek_taller/results_germline" \
-  -work-dir "$HOME/sarek_taller/work" \
-  -profile RUNTIME \
-  -with-report   "$HOME/sarek_taller/germinal_pipeline_info/execution_report_YYYY-MM-DD_HH-MM-SS.html" \
-  -with-timeline "$HOME/sarek_taller/germinal_pipeline_info/timeline_YYYY-MM-DD_HH-MM-SS.html" \
-  -with-trace    "$HOME/sarek_taller/germinal_pipeline_info/trace_YYYY-MM-DD_HH-MM-SS.txt" \
-  [-resume]
+nextflow run nf-core/sarek   -params-file "$HOME/sarek_taller/params.yaml"   --outdir "$HOME/sarek_taller/results_germline"   -work-dir "$HOME/sarek_taller/work_germline"   -profile RUNTIME   -with-report   "$HOME/sarek_taller/results_germline/pipeline_info/execution_report_YYYY-MM-DD_HH-MM-SS.html"   -with-timeline "$HOME/sarek_taller/results_germline/pipeline_info/timeline_YYYY-MM-DD_HH-MM-SS.html"   -with-trace    "$HOME/sarek_taller/results_germline/pipeline_info/trace_YYYY-MM-DD_HH-MM-SS.txt"   [-resume]
 ```
 
 **Somático**
 ```bash
-nextflow run nf-core/sarek \
-  -params-file "$HOME/sarek_taller/params.yaml" \
-  --outdir "$HOME/sarek_taller/results_somatic" \
-  --somatic \
-  -work-dir "$HOME/sarek_taller/work" \
-  -profile RUNTIME \
-  -with-report   "$HOME/sarek_taller/somatic_pipeline_info/execution_report_YYYY-MM-DD_HH-MM-SS.html" \
-  -with-timeline "$HOME/sarek_taller/somatic_pipeline_info/timeline_YYYY-MM-DD_HH-MM-SS.html" \
-  -with-trace    "$HOME/sarek_taller/somatic_pipeline_info/trace_YYYY-MM-DD_HH-MM-SS.txt" \
-  [-resume]
+nextflow run nf-core/sarek   -params-file "$HOME/sarek_taller/params.yaml"   --outdir "$HOME/sarek_taller/results_somatic"   --somatic   -work-dir "$HOME/sarek_taller/work_somatic"   -profile RUNTIME   -with-report   "$HOME/sarek_taller/results_somatic/pipeline_info/execution_report_YYYY-MM-DD_HH-MM-SS.html"   -with-timeline "$HOME/sarek_taller/results_somatic/pipeline_info/timeline_YYYY-MM-DD_HH-MM-SS.html"   -with-trace    "$HOME/sarek_taller/results_somatic/pipeline_info/trace_YYYY-MM-DD_HH-MM-SS.txt"   [-resume]
 ```
 
 Donde **`RUNTIME`** es el que detectan los scripts (`docker`, `podman`, `apptainer`, `singularity` o `conda`).  
