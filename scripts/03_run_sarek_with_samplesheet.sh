@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 03_run_sarek_with_samplesheet.sh
-# Ejecuta nf-core/sarek en modo GERMINAL o SOMÁTICO con datasets livianos de ejemplo.
-# - Descarga los FASTQ si no existen (idempotente) con validación de integridad.
-# - Genera un samplesheet acorde a Sarek 3.x (patient,sample,lane,fastq_1,fastq_2,sex,status).
-# - Permite activar anotación con SnpEff y/o VEP vía -params-file (snpeff/vep booleans).
-# - Detecta el motor (docker/podman/apptainer/singularity/conda).
-# - Opción de usar o NO un config de recursos (útil en WSL/VMs): export NO_WSL_CFG=1 para saltarlo.
+# 03_run_sarek_with_samplesheet.sh (sin nextflow.config)
+# Ejecuta nf-core/sarek en modo GERMINAL o SOMÁTICO con datasets livianos.
+# - Descarga FASTQ con verificación (idempotente).
+# - Genera samplesheets válidos para Sarek 3.x.
+# - Activa anotación opcional (SnpEff / VEP) vía -params-file.
+# - Detecta runtime: docker > podman > apptainer > singularity > conda.
 #
 # Uso:
 #   bash scripts/03_run_sarek_with_samplesheet.sh germinal
@@ -15,98 +14,76 @@ set -euo pipefail
 #
 # Variables opcionales:
 #   OUTDIR=results_germline   # o results_somatic
-#   NXF_VER=25.10.0           # versión de Nextflow a usar
-#   RESUME=1                  # si está seteado, agrega -resume
-#   GENOME=GATK.GRCh38        # alias soportado por Sarek (o setea uno propio)
-#   MAX_RETRIES=3             # veces a reintentar descargas dañadas
-#   ANNOTATORS=snpeff         # 'snpeff', 'vep' o 'vep,snpeff' (en cualquier orden)
-#   NO_WSL_CFG=1              # si se setea, NO pasa -c con el config de recursos
+#   NXF_VER=25.10.0           # versión mínima recomendada de Nextflow
+#   RESUME=1                  # agrega -resume
+#   GENOME=GATK.GRCh38        # alias soportado por Sarek
+#   MAX_RETRIES=3             # reintentos de descarga
+#   ANNOTATORS=snpeff         # 'snpeff', 'vep' o 'vep,snpeff'
 #
+
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
   echo "Uso: bash $0 <germinal|somatico>"
   exit 1
 fi
 
-# --- Configuración general ---
+# --- Rutas ---
 WORKDIR="$HOME/sarek_taller"
 DATADIR="$WORKDIR/data"
 mkdir -p "$DATADIR"
 cd "$WORKDIR"
 
-# Archivo de configuración de recursos (útil en WSL/VMs pequeñas)
-NF_CONFIG="${NF_CONFIG:-$WORKDIR/wsl_resources.config}"
-if [[ -z "${NO_WSL_CFG:-}" ]]; then
-  cat > "$NF_CONFIG" <<'EOF'
-process {
-  executor = 'local'
-  maxForks = 2
-  cpus   = 1
-  memory = '3 GB'
-  time   = '12h'
-  maxCpus   = 2
-  maxMemory = '6 GB'
-}
-EOF
-fi
-
-# ---------- Detección de runtime (robusta) ----------
-PROFILE=""       # perfil a pasar a -profile (docker/podman/apptainer/conda o vacío)
-RUNTIME_FLAG=""  # flags extra (p.ej. -with-singularity)
-
+# --- Detección de runtime ---
+PROFILE=""
+RUNTIME=""
 if command -v docker >/dev/null 2>&1; then
-  PROFILE="docker"
+  RUNTIME="docker"
 elif command -v podman >/dev/null 2>&1; then
-  PROFILE="podman"
+  RUNTIME="podman"
 elif command -v apptainer >/dev/null 2>&1; then
-  PROFILE="apptainer"
+  RUNTIME="apptainer"
 elif command -v singularity >/dev/null 2>&1; then
-  # Solo Singularity presente: no usar perfil apptainer; forzar -with-singularity
-  PROFILE=""  # sin perfil de runtime
-  RUNTIME_FLAG="-with-singularity"
-  # Cache local para Singularity (opcional, recomendado)
-  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$HOME/.singularity}"
-  mkdir -p "$SINGULARITY_CACHEDIR"
-  # Ayuda a Nextflow a preferir Singularity y no apptainer
-  export NXF_SINGULARITY_ENABLED=true
-  export NXF_APPTAINER_ENABLED=false
+  RUNTIME="singularity"
 elif command -v conda >/dev/null 2>&1; then
-  PROFILE="conda"
+  RUNTIME="conda"
 else
   echo "[ERROR] No hay docker/podman/apptainer/singularity/conda en PATH."
   exit 1
 fi
 
-# Asegurar Nextflow versión suficiente
+PROFILE="$RUNTIME"
+# Si es singularity, usar el perfil singularity y cache local
+if [[ "$RUNTIME" == "singularity" ]]; then
+  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$HOME/.singularity}"
+  mkdir -p "$SINGULARITY_CACHEDIR"
+fi
+
+# Asegurar versión de Nextflow
 export NXF_VER="${NXF_VER:-25.10.0}"
 
 # Bandera resume
 RESUME_FLAG=""
-if [[ "${RESUME:-}" != "" ]]; then
-  RESUME_FLAG="-resume"
-fi
+[[ -n "${RESUME:-}" ]] && RESUME_FLAG="-resume"
 
-# Genoma por defecto
+# Genoma
 GENOME="${GENOME:-GATK.GRCh38}"
 
-# Reintentos de descarga
+# Reintentos
 MAX_RETRIES="${MAX_RETRIES:-3}"
 
-# ---------- Utilidades de descarga y verificación ----------
+# ---------- Descarga con verificación ----------
 verify_fastq() {
   local f="$1"
   echo ">>> Verificando $f"
   if ! gzip -t "$f" 2>/dev/null; then
-    echo "[ERR] gzip corrupto en $f"
-    return 1
+    echo "[ERR] gzip corrupto en $f"; return 1
   fi
   local head4 L1 L3
   head4="$(zcat "$f" 2>/dev/null | sed -n '1,4p' || true)"
   L1="$(printf '%s\n' "$head4" | sed -n '1p')"
   L3="$(printf '%s\n' "$head4" | sed -n '3p')"
   if [[ "${L1:0:1}" != "@" || "${L3:0:1}" != "+" ]]; then
-    echo "[ERR] Estructura FASTQ inválida en $f"
-    return 1
+    echo "[ERR] Estructura FASTQ inválida en $f"; return 1
   fi
   echo "[OK] $f pasó verificación"
 }
@@ -124,29 +101,19 @@ dl() {
   local url="$1"; local out="$2"
   if [[ -s "$out" ]]; then
     echo "[skip] Ya existe $out"
-    if verify_fastq "$out"; then
-      return 0
-    else
-      echo "[WARN] Archivo existente inválido, se re-descargará: $out"
-      rm -f "$out"
-    fi
+    if verify_fastq "$out"; then return 0; else rm -f "$out"; fi
   fi
   local attempt=1
   while (( attempt <= MAX_RETRIES )); do
     echo "[get] ($attempt/$MAX_RETRIES) $url -> $out"
     _fetch "$url" "$out" || true
-    if verify_fastq "$out"; then
-      return 0
-    fi
-    echo "[WARN] Descarga inválida: $out"
-    rm -f "$out"
-    attempt=$((attempt+1))
+    if verify_fastq "$out"; then return 0; fi
+    echo "[WARN] Descarga inválida: $out"; rm -f "$out"; attempt=$((attempt+1))
   done
-  echo "[FATAL] No se pudo obtener un FASTQ válido: $out"
-  exit 2
+  echo "[FATAL] No se pudo obtener FASTQ válido: $out"; exit 2
 }
 
-# ---------- Construcción de params.yaml (snpeff/vep) ----------
+# ---------- params.yaml (anotadores) ----------
 PARAMS_FILE="$WORKDIR/params_annot.yaml"
 cat > "$PARAMS_FILE" <<EOF
 snpeff: false
@@ -160,13 +127,7 @@ if [[ "${ANNOTATORS:-}" =~ (^|,)vep($|,) ]]; then
   sed -i 's/^vep: false/vep: true/' "$PARAMS_FILE"
 fi
 
-# Armar args de config (según NO_WSL_CFG)
-CFG_ARGS=()
-if [[ -z "${NO_WSL_CFG:-}" ]]; then
-  CFG_ARGS=(-c "$NF_CONFIG")
-fi
-
-# Helper para componer argumentos de perfil
+# Helper para -profile (solo si existe)
 profile_args=()
 if [[ -n "$PROFILE" ]]; then
   profile_args=(-profile "$PROFILE")
@@ -175,8 +136,7 @@ fi
 # ---------- Flujo principal ----------
 case "$MODE" in
   germinal|germ)
-    echo ">>> Modo GERMINAL"
-
+    echo ">>> Modo GERMINAL (perfil: ${PROFILE})"
     FQ1="$DATADIR/SRR622461_1.fastq.gz"
     FQ2="$DATADIR/SRR622461_2.fastq.gz"
     dl "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR622/SRR622461/SRR622461_1.fastq.gz" "$FQ1"
@@ -188,24 +148,13 @@ patient,sample,lane,fastq_1,fastq_2,sex,status
 NA12878,NA12878,1,$FQ1,$FQ2,XX,0
 EOF
 
-    OUT="${OUTDIR:-results_germline}"
-    mkdir -p "$OUT"
+    OUT="${OUTDIR:-results_germline}"; mkdir -p "$OUT"
 
-    echo ">>> Ejecutando Sarek GERMINAL (perfil: ${PROFILE:-none} ${RUNTIME_FLAG})"
-    nextflow run nf-core/sarek \
-      --input "$SAMPLESHEET" \
-      --genome "$GENOME" \
-      --outdir "$OUT" \
-      -params-file "$PARAMS_FILE" \
-      "${profile_args[@]}" \
-      "${CFG_ARGS[@]}" \
-      ${RUNTIME_FLAG} \
-      $RESUME_FLAG
+    nextflow run nf-core/sarek       --input "$SAMPLESHEET"       --genome "$GENOME"       --outdir "$OUT"       -params-file "$PARAMS_FILE"       "${profile_args[@]}"       $RESUME_FLAG
     ;;
 
   somatico|somatic)
-    echo ">>> Modo SOMÁTICO (tumor/normal)"
-
+    echo ">>> Modo SOMÁTICO (tumor/normal) (perfil: ${PROFILE})"
     N1="$DATADIR/SRR1663561_1.fastq.gz"
     N2="$DATADIR/SRR1663561_2.fastq.gz"
     T1="$DATADIR/SRR1663550_1.fastq.gz"
@@ -223,20 +172,9 @@ P01,NORMAL,1,$N1,$N2,XX,0
 P01,TUMOR,1,$T1,$T2,XX,1
 EOF
 
-    OUT="${OUTDIR:-results_somatic}"
-    mkdir -p "$OUT"
+    OUT="${OUTDIR:-results_somatic}"; mkdir -p "$OUT"
 
-    echo ">>> Ejecutando Sarek SOMÁTICO (perfil: ${PROFILE:-none} ${RUNTIME_FLAG})"
-    nextflow run nf-core/sarek \
-      --input "$SAMPLESHEET" \
-      --genome "$GENOME" \
-      --outdir "$OUT" \
-      --somatic \
-      -params-file "$PARAMS_FILE" \
-      "${profile_args[@]}" \
-      "${CFG_ARGS[@]}" \
-      ${RUNTIME_FLAG} \
-      $RESUME_FLAG
+    nextflow run nf-core/sarek       --input "$SAMPLESHEET"       --genome "$GENOME"       --outdir "$OUT"       --somatic       -params-file "$PARAMS_FILE"       "${profile_args[@]}"       $RESUME_FLAG
     ;;
 
   *)
