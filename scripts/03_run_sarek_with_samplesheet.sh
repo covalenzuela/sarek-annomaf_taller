@@ -5,7 +5,7 @@ set -euo pipefail
 # Ejecuta nf-core/sarek en modo GERMINAL o SOMÁTICO con datasets livianos.
 # - Descarga FASTQ con verificación (idempotente).
 # - Genera samplesheets válidos para Sarek 3.x.
-# - Activa anotación opcional (SnpEff / VEP) vía -params-file.
+# - Activa anotación opcional (SnpEff / VEP) con defaults si se solicitan.
 # - Detecta runtime: docker > podman > apptainer > singularity > conda.
 #
 # Uso:
@@ -13,13 +13,14 @@ set -euo pipefail
 #   bash scripts/03_run_sarek_with_samplesheet.sh somatico
 #
 # Variables opcionales:
-#   OUTDIR=results_germline   # o results_somatic
-#   NXF_VER=25.10.0           # versión mínima recomendada de Nextflow
-#   RESUME=1                  # agrega -resume
-#   GENOME=GATK.GRCh38        # alias soportado por Sarek
-#   MAX_RETRIES=3             # reintentos de descarga
-#   ANNOTATORS=snpeff         # 'snpeff', 'vep' o 'vep,snpeff'
-#
+#   OUTDIR=results_germline | results_somatic
+#   NXF_VER=25.10.0
+#   RESUME=1
+#   GENOME=GATK.GRCh38
+#   MAX_RETRIES=3
+#   ANNOTATORS=snpeff | vep | vep,snpeff
+#   TOOLS="HaplotypeCaller"  (solo si quieres sobre-escribir los defaults por modo)
+#   ALIGNER=bwa-mem2         (bwa-mem, bwa-mem2, dragmap, etc.)
 
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
@@ -30,11 +31,10 @@ fi
 # --- Rutas ---
 WORKDIR="$HOME/sarek_taller"
 DATADIR="$WORKDIR/data"
-mkdir -p "$DATADIR"
+mkdir -p "$DATADIR" "$WORKDIR"
 cd "$WORKDIR"
 
-# --- Detección de runtime ---
-PROFILE=""
+# --- Runtime ---
 RUNTIME=""
 if command -v docker >/dev/null 2>&1; then
   RUNTIME="docker"
@@ -52,23 +52,21 @@ else
 fi
 
 PROFILE="$RUNTIME"
-# Si es singularity, usar el perfil singularity y cache local
-if [[ "$RUNTIME" == "singularity" ]]; then
+
+# Cache para apptainer/singularity
+if [[ "$RUNTIME" == "apptainer" || "$RUNTIME" == "singularity" ]]; then
   export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$HOME/.singularity}"
+  export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-$SINGULARITY_CACHEDIR}"
   mkdir -p "$SINGULARITY_CACHEDIR"
 fi
 
-# Asegurar versión de Nextflow
+# Nextflow
 export NXF_VER="${NXF_VER:-25.10.0}"
-
-# Bandera resume
 RESUME_FLAG=""
 [[ -n "${RESUME:-}" ]] && RESUME_FLAG="-resume"
 
-# Genoma
+# Genoma & recursos
 GENOME="${GENOME:-GATK.GRCh38}"
-
-# Reintentos
 MAX_RETRIES="${MAX_RETRIES:-3}"
 
 # ---------- Descarga con verificación ----------
@@ -113,30 +111,51 @@ dl() {
   echo "[FATAL] No se pudo obtener FASTQ válido: $out"; exit 2
 }
 
-# ---------- params.yaml (anotadores) ----------
+# ---------- params_annot.yaml ----------
 PARAMS_FILE="$WORKDIR/params_annot.yaml"
-cat > "$PARAMS_FILE" <<EOF
+cat > "$PARAMS_FILE" <<'EOF'
 snpeff: false
 vep: false
 use_annotation_cache_keys: true
 EOF
+
+# Autocomplete de anotadores si se piden
 if [[ "${ANNOTATORS:-}" =~ (^|,)snpeff($|,) ]]; then
   sed -i 's/^snpeff: false/snpeff: true/' "$PARAMS_FILE"
+  # Defaults seguros para GRCh38 si el usuario no los pasó por environment
+  grep -q '^snpeff_genome:' "$PARAMS_FILE" || echo "snpeff_genome: ${SNPEFF_GENOME:-GRCh38}" >> "$PARAMS_FILE"
+  grep -q '^snpeff_db:'     "$PARAMS_FILE" || echo "snpeff_db: ${SNPEFF_DB:-105}"          >> "$PARAMS_FILE"
 fi
 if [[ "${ANNOTATORS:-}" =~ (^|,)vep($|,) ]]; then
   sed -i 's/^vep: false/vep: true/' "$PARAMS_FILE"
+  grep -q '^vep_cache_version:' "$PARAMS_FILE" || echo "vep_cache_version: ${VEP_CACHE_VERSION:-114}" >> "$PARAMS_FILE"
+  grep -q '^vep_species:'       "$PARAMS_FILE" || echo "vep_species: ${VEP_SPECIES:-homo_sapiens}"    >> "$PARAMS_FILE"
 fi
 
-# Helper para -profile (solo si existe)
-profile_args=()
-if [[ -n "$PROFILE" ]]; then
-  profile_args=(-profile "$PROFILE")
+# Helper perfil
+profile_args=(-profile "$PROFILE")
+
+# Report/timeline/trace con timestamp
+ts="$(date +%F_%H-%M-%S)"
+extra_report_args=(
+  -with-report   "$WORKDIR/${MODE}_pipeline_info/execution_report_${ts}.html"
+  -with-timeline "$WORKDIR/${MODE}_pipeline_info/timeline_${ts}.html"
+  -with-trace    "$WORKDIR/${MODE}_pipeline_info/trace_${ts}.txt"
+)
+mkdir -p "$WORKDIR/${MODE}_pipeline_info"
+
+# Defaults por modo (si no los sobre-escriben con TOOLS/ALIGNER)
+ALIGNER="${ALIGNER:-bwa-mem2}"
+if [[ "$MODE" =~ ^germ(inal)?$ ]]; then
+  TOOLS_LIST="${TOOLS:-HaplotypeCaller}"
+else
+  TOOLS_LIST="${TOOLS:-Mutect2,Strelka}"
 fi
 
 # ---------- Flujo principal ----------
 case "$MODE" in
   germinal|germ)
-    echo ">>> Modo GERMINAL (perfil: ${PROFILE})"
+    echo ">>> Modo GERMINAL (runtime: ${PROFILE})"
     FQ1="$DATADIR/SRR622461_1.fastq.gz"
     FQ2="$DATADIR/SRR622461_2.fastq.gz"
     dl "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR622/SRR622461/SRR622461_1.fastq.gz" "$FQ1"
@@ -148,13 +167,30 @@ patient,sample,lane,fastq_1,fastq_2,sex,status
 NA12878,NA12878,1,$FQ1,$FQ2,XX,0
 EOF
 
-    OUT="${OUTDIR:-results_germline}"; mkdir -p "$OUT"
+    OUT="${OUTDIR:-$WORKDIR/results_germline}"; mkdir -p "$OUT"
 
-    nextflow run nf-core/sarek       --input "$SAMPLESHEET"       --genome "$GENOME"       --outdir "$OUT"       -params-file "$PARAMS_FILE"       "${profile_args[@]}"       $RESUME_FLAG
+    # Construye params.yaml dinámico (merge mínimo) aparte del annot
+    RUN_PARAMS="$WORKDIR/params_run.yaml"
+    cat > "$RUN_PARAMS" <<EOF
+input: "$SAMPLESHEET"
+genome: "$GENOME"
+aligner: "$ALIGNER"
+tools:
+$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
+EOF
+
+    nextflow run nf-core/sarek \
+      -params-file "$RUN_PARAMS" \
+      -params-file "$PARAMS_FILE" \
+      --outdir "$OUT" \
+      -work-dir "$WORKDIR/work" \
+      "${profile_args[@]}" \
+      "${extra_report_args[@]}" \
+      $RESUME_FLAG
     ;;
 
   somatico|somatic)
-    echo ">>> Modo SOMÁTICO (tumor/normal) (perfil: ${PROFILE})"
+    echo ">>> Modo SOMÁTICO (runtime: ${PROFILE})"
     N1="$DATADIR/SRR1663561_1.fastq.gz"
     N2="$DATADIR/SRR1663561_2.fastq.gz"
     T1="$DATADIR/SRR1663550_1.fastq.gz"
@@ -169,12 +205,29 @@ EOF
     cat > "$SAMPLESHEET" <<EOF
 patient,sample,lane,fastq_1,fastq_2,sex,status
 P01,NORMAL,1,$N1,$N2,XX,0
-P01,TUMOR,1,$T1,$T2,XX,1
+P01,TUMOR, 1,$T1,$T2,XX,1
 EOF
 
-    OUT="${OUTDIR:-results_somatic}"; mkdir -p "$OUT"
+    OUT="${OUTDIR:-$WORKDIR/results_somatic}"; mkdir -p "$OUT"
 
-    nextflow run nf-core/sarek       --input "$SAMPLESHEET"       --genome "$GENOME"       --outdir "$OUT"       --somatic       -params-file "$PARAMS_FILE"       "${profile_args[@]}"       $RESUME_FLAG
+    RUN_PARAMS="$WORKDIR/params_run.yaml"
+    cat > "$RUN_PARAMS" <<EOF
+input: "$SAMPLESHEET"
+genome: "$GENOME"
+aligner: "$ALIGNER"
+tools:
+$(echo "$TOOLS_LIST" | awk -v RS=',' '{gsub(/^[[:space:]]+|[[:space:]]+$/,""); print "- "$0}')
+EOF
+
+    nextflow run nf-core/sarek \
+      -params-file "$RUN_PARAMS" \
+      -params-file "$PARAMS_FILE" \
+      --outdir "$OUT" \
+      --somatic \
+      -work-dir "$WORKDIR/work" \
+      "${profile_args[@]}" \
+      "${extra_report_args[@]}" \
+      $RESUME_FLAG
     ;;
 
   *)
