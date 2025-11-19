@@ -26,6 +26,7 @@ set -euo pipefail
 #   NXF_VER=25.10.0         # versión mínima recomendada de Nextflow
 #   MAX_RETRIES=3           # reintentos en descargas
 #   VERIFY_FASTQ=0|1        # 1 = verificar gzip+FASTQ (por defecto), 0 = omitir verificación
+#   MAX_CPUS=<n>            # máx. CPUs por proceso en Sarek (por defecto 8)
 #
 # Notas:
 # - Por defecto, este script elige WORK_SUBDIR y NXF_HOME por MODO:
@@ -265,6 +266,7 @@ validate_aligner "$ALIGNER_VAL"
 parse_and_validate_annotators "$ANNOTATORS_CANON"
 # En este punto SNP_EFF y VEP ya están seteados ("true"/"false")
 
+
 # ---------- Workdirs / caches según MODO ----------
 timestamp="$(date +%F_%H-%M-%S)"
 
@@ -331,6 +333,7 @@ esac
 
 # ---------- Escribir params.yaml ----------
 PARAMS_FILE="$WORKROOT/params.yaml"
+MAX_CPUS_PARAM="${MAX_CPUS:-8}"   # valor por defecto si no se define MAX_CPUS
 
 cat > "$PARAMS_FILE" <<EOF
 # Archivo generado por 03_run_sarek_with_samplesheet.sh
@@ -340,6 +343,7 @@ aligner: "$ALIGNER_VAL"
 tools: "$TOOLS_VAL"
 snpeff: $SNP_EFF
 vep: $VEP
+max_cpus: $MAX_CPUS_PARAM
 EOF
 
 # Si activaste snpeff/vep, añadimos defaults razonables
@@ -365,6 +369,7 @@ echo "    ANNOTATORS  = ${ANNOTATORS_CANON:-<none>}"
 echo "    SNP_EFF?    = $SNP_EFF"
 echo "    VEP?        = $VEP"
 echo "    VERIFY_FASTQ= $VERIFY_FASTQ"
+echo "    MAX_CPUS    = $MAX_CPUS_PARAM"
 
 echo ">>> params.yaml -> $PARAMS_FILE"
 echo ">>> samplesheet -> $SAMPLESHEET"
