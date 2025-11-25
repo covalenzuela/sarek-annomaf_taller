@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 02_run_sarek_test.sh (overwrite mode SIN nextflow.config)
-# Ejecuta nf-core/sarek con el perfil de prueba y detecta el runtime:
-# docker > podman > apptainer > singularity > conda
-# Escribe report/trace/timeline con NOMBRES FIJOS y fuerza sobrescritura
-# usando -c <(printf ...) para no depender de un archivo nextflow.config.
-#
-# Uso:
-#   bash scripts/02_run_sarek_test.sh
-# Variables opcionales:
-#   OUTDIR=/ruta/custom/results_test_sarek
-#   NXF_VER=25.10.0
-#   RESUME=1                # agrega -resume si está definida
+# 02_run_sarek_test.sh
+# Ejecuta nf-core/sarek con el perfil de prueba,
+# usando el entorno LOCAL del repo (activate_env.sh).
 
-# Workspace del taller
-mkdir -p "$HOME/sarek_taller"
-cd "$HOME/sarek_taller"
-echo ">>> Carpeta de trabajo: $PWD"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+BASE_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+cd "$BASE_DIR"
+echo ">>> Carpeta de trabajo del taller: $BASE_DIR"
+
+# Activar entorno local
+if [[ -f "$BASE_DIR/activate_env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$BASE_DIR/activate_env.sh"
+else
+  echo "[ERROR] No se encontró activate_env.sh."
+  echo "        Ejecuta primero: bash scripts/01_install_java_nextflow.sh"
+  exit 1
+fi
+
+echo ">>> Entorno activo:"
+echo "    JAVA_HOME = ${JAVA_HOME:-no_definido}"
+echo "    NXF_HOME  = ${NXF_HOME:-no_definido}"
+echo "    NXF_VER   = ${NXF_VER:-no_definido}"
+echo
 
 # Detectar runtime
 PROFILE="test"
@@ -39,21 +47,20 @@ fi
 PROFILE="${PROFILE},${RUNTIME}"
 echo ">>> Usando perfil: $PROFILE"
 
-# Cache para Singularity (recomendado)
-if [[ "$RUNTIME" == "singularity" ]]; then
-  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$HOME/.singularity}"
-  export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-$SINGULARITY_CACHEDIR}"
-  mkdir -p "$SINGULARITY_CACHEDIR"
+# Cache para Singularity/Apptainer
+if [[ "$RUNTIME" == "singularity" || "$RUNTIME" == "apptainer" ]]; then
+  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$BASE_DIR/.singularity}"
+  export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$BASE_DIR/.apptainer}"
+  mkdir -p "$SINGULARITY_CACHEDIR" "$APPTAINER_CACHEDIR"
 fi
 
-# Nextflow recomendado
+# Nextflow recomendado (puede venir de activate_env.sh)
 export NXF_VER="${NXF_VER:-25.10.0}"
 
-# OUTDIR y artefactos
-OUTDIR="${OUTDIR:-$HOME/sarek_taller/results_test_sarek}"
+OUTDIR="${OUTDIR:-$BASE_DIR/output/results_test_sarek}"
 mkdir -p "$OUTDIR/pipeline_info"
+mkdir -p "$BASE_DIR/work"
 
-# -resume opcional
 RESUME_FLAG=""
 [[ -n "${RESUME:-}" ]] && RESUME_FLAG="-resume"
 
@@ -61,7 +68,7 @@ echo ">>> Ejecutando nf-core/sarek (test) en $OUTDIR (overwrite activado) ..."
 nextflow run nf-core/sarek \
   -profile "$PROFILE" \
   --outdir "$OUTDIR" \
-  -work-dir "$HOME/sarek_taller/work" \
+  -work-dir "$BASE_DIR/work" \
   -with-report   "$OUTDIR/pipeline_info/execution_report.html" \
   -with-trace    "$OUTDIR/pipeline_info/trace.txt" \
   -with-timeline "$OUTDIR/pipeline_info/timeline.html" \
@@ -72,5 +79,5 @@ nextflow run nf-core/sarek \
   ${RESUME_FLAG}
 
 echo
-echo '>>> Ejecución completada. Estructura de resultados (primeros niveles):'
-find "$OUTDIR" -maxdepth 3 -type f | sed -n '1,80p' || true
+echo '>>> Ejecución completada. Algunos archivos de salida:'
+find "$OUTDIR" -maxdepth 3 -type f | sed -n '1,50p' || true

@@ -1,156 +1,152 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REQUIRED_JAVA_MAJOR=17
+# 01_install_java_nextflow.sh
+# Instala Java 17 y Nextflow SOLO dentro de este repositorio
+# y crea un script de activación: ./activate_env.sh
+# Además muestra un resumen de:
+# - versiones del sistema (si existen)
+# - versiones locales instaladas
 
-echo ">>> Instalando Java ${REQUIRED_JAVA_MAJOR}+ (si es necesario) y Nextflow en \$HOME/bin"
+BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+SOFT_DIR="$BASE_DIR/software"
+JAVA_DIR="$SOFT_DIR/java-17"
+NXF_BIN="$SOFT_DIR/nextflow"
 
-log()   { echo "[INFO] $*"; }
-warn()  { echo "[WARN] $*" >&2; }
-error() { echo "[ERROR] $*" >&2; exit 1; }
+JDK_VERSION_HUMANO="OpenJDK 17 (BellSoft)"
+JDK_URL="https://download.bell-sw.com/java/17.0.13+12/bellsoft-jdk17.0.13+12-linux-amd64.tar.gz"
+TARGET_NXF_VER="25.10.0"
 
-detect_pkg_manager() {
-  if command -v apt-get >/dev/null 2>&1; then
-    echo "apt-get"
-  elif command -v dnf >/dev/null 2>&1; then
-    echo "dnf"
-  elif command -v yum >/dev/null 2>&1; then
-    echo "yum"
-  elif command -v zypper >/dev/null 2>&1; then
-    echo "zypper"
-  elif command -v pacman >/dev/null 2>&1; then
-    echo "pacman"
-  else
-    echo "unknown"
-  fi
-}
+mkdir -p "$SOFT_DIR"
 
-install_java17() {
-  local pm
-  pm="$(detect_pkg_manager)"
+echo "======================================================="
+echo " 01) CHEQUEO DE ENTORNO DEL SISTEMA (ANTES)"
+echo "======================================================="
 
-  case "$pm" in
-    apt-get)
-      log "Instalando Java 17 vía apt-get (openjdk-17-jdk o temurin-17-jdk)..."
-      sudo apt-get update -y
-      if ! sudo apt-get install -y openjdk-17-jdk; then
-        warn "No se pudo instalar openjdk-17-jdk, probando temurin-17-jdk..."
-        sudo apt-get install -y temurin-17-jdk || warn "No se pudo instalar temurin-17-jdk."
-      fi
-      ;;
-    dnf)
-      log "Instalando Java 17 vía dnf..."
-      sudo dnf install -y java-17-openjdk-devel || warn "Fallo instalación con dnf."
-      ;;
-    yum)
-      log "Instalando Java 17 vía yum..."
-      sudo yum install -y java-17-openjdk-devel || warn "Fallo instalación con yum."
-      ;;
-    zypper)
-      log "Instalando Java 17 vía zypper..."
-      sudo zypper install -y java-17-openjdk-devel || warn "Fallo instalación con zypper."
-      ;;
-    pacman)
-      log "Instalando Java 17 vía pacman..."
-      sudo pacman -Sy --noconfirm jdk17-openjdk || warn "Fallo instalación con pacman."
-      ;;
-    *)
-      warn "No se detectó un gestor de paquetes soportado. Instala Java 17 manualmente."
-      ;;
-  esac
-}
-
-get_java_major() {
-  # Usa el java actual en PATH
-  if ! command -v java >/dev/null 2>&1; then
-    echo ""
-    return
-  fi
-
-  # Capturar la primera línea de `java -version`
-  local ver_line ver_str major
-  ver_line="$(java -version 2>&1 | head -n1 || true)"
-
-  # Extraer lo que está entre comillas: "17.0.10" o "1.8.0_45"
-  ver_str="$(printf '%s\n' "$ver_line" | sed -E 's/.*version "([^"]+)".*/\1/' || true)"
-
-  if [ -z "$ver_str" ]; then
-    echo ""
-    return
-  fi
-
-  major="${ver_str%%.*}"  # antes del primer punto
-
-  # Manejar formato antiguo tipo 1.8.0_xx → major = 8
-  if [ "$major" = "1" ]; then
-    # segundo componente: 8 en 1.8.0_45
-    local minor
-    minor="$(printf '%s\n' "$ver_str" | cut -d. -f2)"
-    major="$minor"
-  fi
-
-  echo "$major"
-}
-
-ensure_java() {
-  local major
-
-  if ! command -v java >/dev/null 2>&1; then
-    warn "Java no está instalado. Intentando instalar Java ${REQUIRED_JAVA_MAJOR}..."
-    install_java17
-  else
-    log "Java ya está instalado. Versión detectada:"
-    java -version 2>&1 || true
-  fi
-
-  major="$(get_java_major || true)"
-
-  if [ -z "$major" ]; then
-    warn "No se pudo determinar la versión de Java. Intenta configurar Java 17 manualmente."
-    return
-  fi
-
-  log "Versión mayor detectada de Java: $major"
-
-  if [ "$major" -lt "$REQUIRED_JAVA_MAJOR" ]; then
-    warn "La versión actual de Java ($major) es menor que la requerida ($REQUIRED_JAVA_MAJOR)."
-    warn "Intentando instalar/actualizar a Java ${REQUIRED_JAVA_MAJOR}..."
-    install_java17
-    major="$(get_java_major || true)"
-    if [ -z "$major" ] || [ "$major" -lt "$REQUIRED_JAVA_MAJOR" ]; then
-      error "No se pudo obtener una versión de Java >= ${REQUIRED_JAVA_MAJOR}. Ajusta Java manualmente y vuelve a ejecutar el script."
-    fi
-  fi
-
-  log "Java cumple el requisito (>= ${REQUIRED_JAVA_MAJOR})."
-}
-
-echo ">>> Comprobando e instalando Java..."
-ensure_java
-
+if command -v java >/dev/null 2>&1; then
+  echo "Sistema: java encontrado en: $(command -v java)"
+  java -version || true
+else
+  echo "Sistema: java NO encontrado en PATH"
+fi
 echo
-echo ">>> Versión de Java tras la comprobación:"
-java -version 2>&1 || warn "java no está disponible a pesar del intento de instalación."
-
-# 2) Instalar Nextflow usando el script oficial en ~/bin
-mkdir -p "$HOME/bin"
-cd "$HOME"
 
 if command -v nextflow >/dev/null 2>&1; then
-  echo "[OK] nextflow ya está en el PATH:"
-  nextflow -version || warn "No se pudo obtener la versión de nextflow."
+  echo "Sistema: nextflow encontrado en: $(command -v nextflow)"
+  nextflow -version || true
 else
-  echo "[INFO] descargando nextflow con get.nextflow.io..."
-  curl -s https://get.nextflow.io | bash
-  chmod +x nextflow
-  mv nextflow "$HOME/bin/"
+  echo "Sistema: nextflow NO encontrado en PATH"
 fi
 
 echo
-echo ">>> Asegúrate de tener en tu ~/.bashrc:"
-echo 'export PATH="$HOME/bin:$PATH"'
+echo "Se instalará localmente en este repo:"
+echo "  - Java : $JDK_VERSION_HUMANO"
+echo "  - NXF_VER objetivo: $TARGET_NXF_VER"
 echo
-echo ">>> Probando nextflow:"
-export PATH="$HOME/bin:$PATH"
-nextflow -version || error "No se pudo ejecutar nextflow. Revisa el PATH o la instalación de Java."
-echo ">>> Instalación/comprobación de Java y Nextflow completada."
+echo "Carpeta del taller:          $BASE_DIR"
+echo "Carpeta para software local: $SOFT_DIR"
+echo "======================================================="
+echo
+
+########################################
+# 1) Instalar Java 17 local
+########################################
+
+if [[ ! -x "$JAVA_DIR/bin/java" ]]; then
+  echo ">>> Descargando $JDK_VERSION_HUMANO (local, sin tocar el sistema)..."
+
+  JDK_TAR="$SOFT_DIR/openjdk17.tar.gz"
+  curl -L "$JDK_URL" -o "$JDK_TAR"
+
+  echo ">>> Descomprimiendo Java 17..."
+  tar -xzf "$JDK_TAR" -C "$SOFT_DIR"
+
+  # Carpeta que se creó dentro de software/
+  JDK_EXTRACTED_DIR="$(tar -tf "$JDK_TAR" | head -1 | cut -d/ -f1)"
+
+  mv "$SOFT_DIR/$JDK_EXTRACTED_DIR" "$JAVA_DIR"
+  rm -f "$JDK_TAR"
+else
+  echo ">>> Java 17 ya está instalado en $JAVA_DIR"
+fi
+
+########################################
+# 2) Instalar Nextflow local
+########################################
+
+if [[ ! -x "$NXF_BIN" ]]; then
+  echo ">>> Descargando Nextflow (local, sin usar ~/bin)..."
+  cd "$SOFT_DIR"
+  curl -s https://get.nextflow.io | bash
+  mv nextflow "$NXF_BIN"
+  chmod +x "$NXF_BIN"
+else
+  echo ">>> Nextflow ya está instalado en $NXF_BIN"
+fi
+
+########################################
+# 3) Crear script de activación de entorno
+########################################
+
+cat > "$BASE_DIR/activate_env.sh" <<EOF
+# Activar entorno local del taller Sarek
+export JAVA_HOME="$JAVA_DIR"
+export PATH="\$JAVA_HOME/bin:$SOFT_DIR:\$PATH"
+
+# Nextflow y cache de Sarek locales a este repo
+export NXF_HOME="$BASE_DIR/.nextflow"
+export NXF_DEFAULT_WORK_DIR="$BASE_DIR/work"
+export NXF_VER="${TARGET_NXF_VER}"
+
+alias nextflow="$NXF_BIN"
+EOF
+
+chmod +x "$BASE_DIR/activate_env.sh"
+
+########################################
+# 4) Crear carpetas de trabajo
+########################################
+
+mkdir -p "$BASE_DIR/work"
+mkdir -p "$BASE_DIR/output"
+mkdir -p "$BASE_DIR/samplesheets"
+
+########################################
+# 5) Resumen de entorno LOCAL (después)
+########################################
+
+echo
+echo "======================================================="
+echo " 02) CHEQUEO DE ENTORNO LOCAL (DESPUÉS)"
+echo "======================================================="
+# shellcheck source=/dev/null
+source "$BASE_DIR/activate_env.sh"
+
+echo "JAVA_HOME = $JAVA_HOME"
+echo "NXF_HOME  = ${NXF_HOME:-no_definido}"
+echo "NXF_VER   = ${NXF_VER:-no_definido}"
+echo
+
+echo "java -version (local):"
+java -version || true
+echo
+
+echo "nextflow -version (local):"
+nextflow -version || true
+
+echo
+echo "======================================================="
+echo " Entorno local listo para ESTE repositorio."
+echo
+echo " En cada terminal, el alumno/profe debe hacer:"
+echo "   cd \"$BASE_DIR\""
+echo "   source activate_env.sh"
+echo
+echo " Luego puede probar:"
+echo "   java -version"
+echo "   nextflow -version"
+echo
+echo " Y ejecutar:"
+echo "   bash scripts/02_run_sarek_test.sh"
+echo "   bash scripts/03_run_sarek_with_samplesheet.sh ..."
+echo "======================================================="
