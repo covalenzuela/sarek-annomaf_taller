@@ -54,9 +54,11 @@ echo
 
 if [[ ! -x "$JAVA_DIR/bin/java" ]]; then
   echo ">>> Descargando $JDK_VERSION_HUMANO (local, sin tocar el sistema)..."
+  echo ">>> (Usando curl --insecure por certificados antiguos en CentOS 7)"
 
   JDK_TAR="$SOFT_DIR/openjdk17.tar.gz"
-  curl -L "$JDK_URL" -o "$JDK_TAR"
+  # PARCHE: --insecure para evitar error de certificado en CentOS 7
+  curl -L --insecure "$JDK_URL" -o "$JDK_TAR"
 
   echo ">>> Descomprimiendo Java 17..."
   tar -xzf "$JDK_TAR" -C "$SOFT_DIR"
@@ -76,8 +78,10 @@ fi
 
 if [[ ! -x "$NXF_BIN" ]]; then
   echo ">>> Descargando Nextflow (local, sin usar ~/bin)..."
+  echo ">>> (Usando curl --insecure por certificados antiguos en CentOS 7)"
   cd "$SOFT_DIR"
-  curl -s https://get.nextflow.io | bash
+  # PARCHE: --insecure también aquí por el mismo problema de certificados
+  curl -s --insecure https://get.nextflow.io | bash
   mv nextflow "$NXF_BIN"
   chmod +x "$NXF_BIN"
 else
